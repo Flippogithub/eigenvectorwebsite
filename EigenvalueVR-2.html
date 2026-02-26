@@ -1,0 +1,713 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Control Theory VR - Eigenvalue Visualizer</title>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/aframe/1.4.2/aframe.min.js"></script>
+  <style>
+    body { margin: 0; overflow: hidden; background: #0a0a1a; }
+    #overlay {
+      position: fixed; top: 0; left: 0; width: 100%; z-index: 999;
+      background: rgba(10,10,26,0.85); color: #c0cdd8; font-family: 'Courier New', monospace;
+      padding: 12px 16px; font-size: 13px; pointer-events: none;
+    }
+    #overlay h1 { margin: 0 0 4px; font-size: 16px; color: #5ba4cf; }
+    #overlay p { margin: 2px 0; font-size: 11px; color: #8899aa; }
+    #controls {
+      position: fixed; bottom: 0; left: 0; width: 100%; z-index: 999;
+      background: rgba(10,10,26,0.9); padding: 10px 16px; pointer-events: auto;
+      font-family: 'Courier New', monospace; color: #c0cdd8; font-size: 12px;
+      display: flex; gap: 16px; align-items: center; flex-wrap: wrap;
+    }
+    #controls button {
+      background: #1a2332; color: #5ba4cf; border: 1px solid #5ba4cf;
+      padding: 6px 14px; border-radius: 4px; cursor: pointer; font-family: inherit; font-size: 12px;
+    }
+    #controls button:hover, #controls button.active { background: #5ba4cf; color: #0a0a1a; }
+    #info-panel {
+      position: fixed; top: 60px; right: 12px; width: 260px; z-index: 999;
+      background: rgba(26,35,50,0.92); border: 1px solid rgba(91,164,207,0.3);
+      border-radius: 8px; padding: 12px; font-family: 'Courier New', monospace;
+      color: #c0cdd8; font-size: 11px; pointer-events: none;
+    }
+    #info-panel h3 { margin: 0 0 6px; color: #f0b429; font-size: 13px; }
+    .eigen-row { display: flex; justify-content: space-between; margin: 3px 0; }
+    .stable { color: #6bbf8a; } .unstable { color: #e8634f; }
+  </style>
+</head>
+<body>
+<div id="overlay">
+  <h1>Control Theory VR -- Eigenvalue Visualizer</h1>
+  <p>Walk around the state-space. Eigenvectors are arrows. Trajectories show system behavior.</p>
+  <p>Quest: Left stick = move, Right stick = turn. Desktop: WASD + mouse.</p>
+</div>
+<div id="info-panel">
+  <h3 id="system-name">Thermostat System</h3>
+  <div id="eigen-info"></div>
+  <div id="evec-info" style="margin-top:8px;"></div>
+  <div id="physics-info" style="margin-top:8px; color:#8899aa;"></div>
+</div>
+<div id="controls">
+  <button id="btn-thermostat" class="active" onclick="switchSystem('thermostat')">Thermostat</button>
+  <button id="btn-wedding" onclick="switchSystem('wedding')">Wedding</button>
+  <button id="btn-swerve" onclick="switchSystem('swerve')">Swerve Drive</button>
+  <span style="color:#5ba4cf;">|</span>
+  <button onclick="toggleTrajectories()">Toggle Trails</button>
+  <button onclick="resetTrajectories()">Reset</button>
+</div>
+
+<a-scene vr-mode-ui="enabled: true" renderer="antialias: true; colorManagement: true" background="color: #0a0a1a">
+  <a-entity light="type: ambient; color: #334455; intensity: 0.5"></a-entity>
+  <a-entity light="type: directional; color: #aabbcc; intensity: 0.6" position="2 4 3"></a-entity>
+  <a-entity light="type: point; color: #5ba4cf; intensity: 0.4" position="0 3 -3"></a-entity>
+
+  <!-- Floor reference grid -->
+  <a-entity id="floor-grid" position="0 0 -3">
+    <a-plane rotation="-90 0 0" width="12" height="12" color="#0f1720" opacity="0.6"
+      material="shader: flat"></a-plane>
+  </a-entity>
+
+  <a-entity id="axes-group" position="0 1.5 -3"></a-entity>
+  <a-entity id="eigenvector-group" position="0 1.5 -3"></a-entity>
+  <a-entity id="trajectory-group" position="0 1.5 -3"></a-entity>
+  <a-entity id="flow-group" position="0 1.5 -3"></a-entity>
+  <a-entity id="coupling-group" position="0 1.5 -3"></a-entity>
+
+  <a-entity id="origin-marker" position="0 1.5 -3">
+    <a-sphere radius="0.08" color="#f0b429" opacity="0.9"
+      animation="property: scale; to: 1.3 1.3 1.3; dur: 1200; dir: alternate; loop: true; easing: easeInOutSine">
+    </a-sphere>
+    <a-text value="EQUILIBRIUM\n(origin)" position="0 -0.2 0" color="#f0b429"
+      align="center" width="2" side="double" look-at="[camera]"></a-text>
+  </a-entity>
+
+  <a-entity id="board-group" position="0 1.5 -3"></a-entity>
+
+  <!-- Camera rig with thumbstick locomotion -->
+  <a-entity id="rig" movement-controls="speed: 0.15; fly: true; controls: gamepad, keyboard"
+    position="0 0 2">
+    <a-camera position="0 1.6 0" look-controls="pointerLockEnabled: false">
+      <a-cursor color="#5ba4cf" fuse="false" raycaster="objects: .clickable"></a-cursor>
+    </a-camera>
+    <!-- Hand controllers visible in VR -->
+    <a-entity id="left-hand" laser-controls="hand: left" raycaster="objects: .clickable"></a-entity>
+    <a-entity id="right-hand" laser-controls="hand: right" raycaster="objects: .clickable"></a-entity>
+  </a-entity>
+</a-scene>
+
+<script>
+// ═══════════════════════════════════════
+// THUMBSTICK LOCOMOTION COMPONENT
+// ═══════════════════════════════════════
+AFRAME.registerComponent('movement-controls', {
+  schema: {
+    speed: { type: 'number', default: 0.15 },
+    fly: { type: 'boolean', default: true },
+    controls: { type: 'string', default: 'gamepad, keyboard' }
+  },
+  init: function() {
+    this.velocity = new THREE.Vector3();
+    this.direction = new THREE.Vector3();
+    this.rotation = new THREE.Euler();
+    this.keys = {};
+    document.addEventListener('keydown', e => this.keys[e.key.toLowerCase()] = true);
+    document.addEventListener('keyup', e => this.keys[e.key.toLowerCase()] = false);
+  },
+  tick: function(time, delta) {
+    if (!delta) return;
+    const dt = delta / 1000;
+    const speed = this.data.speed;
+    let moveX = 0, moveZ = 0, rotY = 0;
+
+    // Keyboard
+    if (this.keys['w'] || this.keys['arrowup']) moveZ = -1;
+    if (this.keys['s'] || this.keys['arrowdown']) moveZ = 1;
+    if (this.keys['a'] || this.keys['arrowleft']) moveX = -1;
+    if (this.keys['d'] || this.keys['arrowright']) moveX = 1;
+
+    // Gamepad (Quest controllers)
+    const gamepads = navigator.getGamepads ? navigator.getGamepads() : [];
+    for (let i = 0; i < gamepads.length; i++) {
+      const gp = gamepads[i];
+      if (!gp) continue;
+      // Left thumbstick: axes 2,3 (movement)
+      if (gp.axes.length >= 4) {
+        const lx = gp.axes[2], ly = gp.axes[3];
+        if (Math.abs(lx) > 0.15) moveX += lx;
+        if (Math.abs(ly) > 0.15) moveZ += ly;
+      }
+      // Right thumbstick: axes 0,1 or 2,3 depending on mapping (rotation)
+      if (gp.axes.length >= 2) {
+        const rx = gp.axes[0];
+        if (Math.abs(rx) > 0.15) rotY -= rx * 2;
+      }
+    }
+
+    // Also try standard gamepad mapping
+    for (let i = 0; i < gamepads.length; i++) {
+      const gp = gamepads[i];
+      if (!gp || !gp.mapping) continue;
+      if (gp.mapping === 'xr-standard' && gp.hand === 'left' && gp.axes.length >= 4) {
+        const lx = gp.axes[2], ly = gp.axes[3];
+        if (Math.abs(lx) > 0.12) moveX = lx;
+        if (Math.abs(ly) > 0.12) moveZ = ly;
+      }
+      if (gp.mapping === 'xr-standard' && gp.hand === 'right' && gp.axes.length >= 4) {
+        const rx = gp.axes[2];
+        if (Math.abs(rx) > 0.12) rotY = -rx * 2.5;
+      }
+    }
+
+    if (moveX === 0 && moveZ === 0 && rotY === 0) return;
+
+    // Apply rotation
+    if (rotY !== 0) {
+      const rot = this.el.getAttribute('rotation') || {x:0,y:0,z:0};
+      this.el.setAttribute('rotation', {x: rot.x, y: rot.y + rotY * dt * 60, z: rot.z});
+    }
+
+    // Get camera world direction for movement
+    const cam = this.el.querySelector('[camera]');
+    if (!cam) return;
+    const camObj = cam.object3D;
+    const worldDir = new THREE.Vector3();
+    camObj.getWorldDirection(worldDir);
+    worldDir.y = 0;
+    worldDir.normalize();
+    const right = new THREE.Vector3();
+    right.crossVectors(worldDir, new THREE.Vector3(0, 1, 0)).normalize();
+
+    const pos = this.el.getAttribute('position');
+    pos.x += (right.x * moveX + worldDir.x * (-moveZ)) * speed * dt * 60;
+    pos.z += (right.z * moveX + worldDir.z * (-moveZ)) * speed * dt * 60;
+    this.el.setAttribute('position', pos);
+  }
+});
+
+// ═══════════════════════════════════════
+// SYSTEM DEFINITIONS (with educational content)
+// ═══════════════════════════════════════
+const SYSTEMS = {
+  thermostat: {
+    name: "Thermostat System",
+    states: ["Room Temp", "Wall Temp"],
+    A: [[-0.10, 0.10], [0.05, -0.08]],
+    scale: 8,
+    colors: { axis1: "#e8634f", axis2: "#5ba4cf" },
+    initialPoints: [[1, 0.2], [-0.5, 1], [1, 1], [-1, -0.5], [0.8, -0.8], [-0.3, 0.7], [0.5, -1], [-1, 0.3]],
+    couplings: [
+      { from: 0, to: 1, label: "Room heats walls\nA(2,1)=+0.05", color: "#6bbf8a", val: 0.05 },
+      { from: 1, to: 0, label: "Walls heat room\nA(1,2)=+0.10", color: "#6bbf8a", val: 0.10 },
+      { from: 0, to: 0, label: "Room self-cools\nA(1,1)=-0.10", color: "#e8634f", val: -0.10 },
+      { from: 1, to: 1, label: "Walls lose heat\nA(2,2)=-0.08", color: "#e8634f", val: -0.08 }
+    ],
+    boards: [
+      { pos: '-3.5 2.5 -1', title: 'WHAT YOU SEE', lines: [
+        'Trails curve toward the ORIGIN (gold sphere).',
+        'This means the system is STABLE.',
+        'Both eigenvalues are negative.',
+        'Turn off the heater and the room',
+        'cools to outside temperature.',
+        '',
+        'All trails end at the origin no matter',
+        'where they start. That is stability.'
+      ], color: '#6bbf8a' },
+      { pos: '3.5 2.5 -1', title: 'THE EIGENVECTORS', lines: [
+        'The GOLD arrow points along [1,1].',
+        'Both temps change equally = whole',
+        'house cooling together. SLOW mode.',
+        '',
+        'The GREEN arrow points along [1,-1].',
+        'Room vs wall mismatch. One goes up',
+        'while other lags. FAST mode.',
+        '',
+        'This is why thermostats overshoot!'
+      ], color: '#f0b429' },
+      { pos: '0 3.5 -5', title: 'A MATRIX = PHYSICS', lines: [
+        'A = [-0.10  +0.10]',
+        '    [+0.05  -0.08]',
+        '',
+        'Diagonal (negative) = self-cooling.',
+        'Each state loses energy on its own.',
+        '',
+        'Off-diagonal (positive) = heat exchange.',
+        'Room and walls warm each other.',
+        '',
+        'NO reinforcing loops = STABLE system.'
+      ], color: '#5ba4cf' },
+      { pos: '0 0.5 -6', title: 'HOW TO READ THE TRAILS', lines: [
+        'Each colored trail starts from a',
+        'different initial condition.',
+        '',
+        'Notice how trails ALIGN with the',
+        'eigenvector arrows as they approach',
+        'the origin. The system naturally',
+        'funnels into eigenvector directions.',
+        '',
+        'The slowest eigenvector dominates',
+        'the final approach to equilibrium.'
+      ], color: '#8899aa' }
+    ]
+  },
+  wedding: {
+    name: "Wedding Reception",
+    states: ["Dance", "BAC", "Noise"],
+    A: [[-0.2, 1.5, 0.3], [0.0, -0.1, 0.0], [0.6, 0.8, -0.3]],
+    scale: 3,
+    colors: { axis1: "#e8634f", axis2: "#f0b429", axis3: "#5ba4cf" },
+    initialPoints: [[1, 0.3, 0.5], [0.2, 1, 0.1], [0.5, 0.5, 1], [-0.5, 0.8, 0.3], [1, 1, 1], [0.1, 0.1, 0.8]],
+    couplings: [
+      { from: 1, to: 0, label: "Booze gets\npeople dancing\nA(1,2)=+1.5", color: "#f0b429", val: 1.5 },
+      { from: 0, to: 2, label: "Dancing\nmakes noise\nA(3,1)=+0.6", color: "#e8634f", val: 0.6 },
+      { from: 1, to: 2, label: "Drunk people\nare loud\nA(3,2)=+0.8", color: "#f0b429", val: 0.8 },
+      { from: 2, to: 0, label: "Noise feeds\ndance energy\nA(1,3)=+0.3", color: "#5ba4cf", val: 0.3 }
+    ],
+    boards: [
+      { pos: '-4 2.5 -1', title: 'UNSTABLE SYSTEM!', lines: [
+        'Some trails fly AWAY from origin.',
+        'At least one eigenvalue is POSITIVE.',
+        'The reinforcing loop amplifies faster',
+        'than friction can damp.',
+        '',
+        'Alcohol -> Dancing -> Noise -> more',
+        'Dancing -> more Noise -> feedback loop',
+        '',
+        'This is why weddings need a planner!'
+      ], color: '#e8634f' },
+      { pos: '4 2.5 -1', title: 'EIGENVECTOR MODES', lines: [
+        'The UNSTABLE eigenvector shows which',
+        'states are coupled in the runaway mode.',
+        '',
+        'Dance, BAC, and Noise rise TOGETHER',
+        'as a package. You cant fix one without',
+        'addressing the whole coupled mode.',
+        '',
+        'Pulsing arrow tip = unstable direction.',
+        'Steady tip = stable direction.'
+      ], color: '#f0b429' },
+      { pos: '0 3.5 -5', title: 'A MATRIX: THE REINFORCING LOOP', lines: [
+        'A = [-0.20  +1.50  +0.30]',
+        '    [+0.00  -0.10  +0.00]',
+        '    [+0.60  +0.80  -0.30]',
+        '',
+        'See the positive off-diagonals?',
+        'A(1,2)=+1.5 is the big one:',
+        'Alcohol STRONGLY drives dancing.',
+        '',
+        'The loop: col2->row1->col1->row3',
+        'amplifies faster than the diagonal',
+        'damping terms (-0.2, -0.1, -0.3).',
+        'Net result: positive eigenvalue.'
+      ], color: '#5ba4cf' },
+      { pos: '0 0.5 -6', title: 'COMPARE TO THERMOSTAT', lines: [
+        'Thermostat: all trails go to origin.',
+        'Wedding: some trails escape to infinity.',
+        '',
+        'The ONLY difference is the A matrix.',
+        'Same math, same eigenvalue computation,',
+        'same trajectory simulation.',
+        '',
+        'Thermostat has no reinforcing loops.',
+        'Wedding has a strong reinforcing loop.',
+        'That loop creates the positive eigenvalue.'
+      ], color: '#8899aa' }
+    ]
+  },
+  swerve: {
+    name: "Swerve Drive Robot",
+    states: ["Vx fwd", "Vy lat", "Yaw rate"],
+    A: [[-0.5, 0.0, 0.3], [0.0, -0.8, -2.0], [0.0, 0.1, -0.4]],
+    scale: 3,
+    colors: { axis1: "#e8634f", axis2: "#6bbf8a", axis3: "#5ba4cf" },
+    initialPoints: [[1, 0.5, 0.2], [0.3, 1, -0.3], [-0.5, 0.5, 1], [1, -1, 0.5], [0.8, 0.2, 0.8], [-0.3, -0.5, -0.5]],
+    couplings: [
+      { from: 2, to: 0, label: "Yaw creates\nfwd force\nA(1,3)=+0.3", color: "#5ba4cf", val: 0.3 },
+      { from: 2, to: 1, label: "Yaw drives\nlateral drift\nA(2,3)=-2.0", color: "#e8634f", val: -2.0 },
+      { from: 1, to: 2, label: "Lateral motion\naffects yaw\nA(3,2)=+0.1", color: "#6bbf8a", val: 0.1 }
+    ],
+    boards: [
+      { pos: '-4 2.5 -1', title: 'STABLE ROBOT (no controller)', lines: [
+        'All trails converge to origin.',
+        'Friction damps everything.',
+        'Cut power and the robot stops.',
+        '',
+        'All eigenvalues are negative.',
+        'The diagonal terms (friction)',
+        'dominate over the coupling terms.',
+        '',
+        'This is the OPEN LOOP behavior.',
+        'A controller would reshape these',
+        'eigenvalues for faster response.'
+      ], color: '#6bbf8a' },
+      { pos: '4 2.5 -1', title: 'YAW-LATERAL COUPLING', lines: [
+        'The big coupling: A(2,3) = -2.0',
+        'Yaw rate strongly drives lateral drift.',
+        'This is the Coriolis effect.',
+        '',
+        'Look at the eigenvector that points',
+        'mostly along Vy and Yaw. Those two',
+        'states are COUPLED in a mode.',
+        '',
+        'Your controller must address both',
+        'simultaneously, not one at a time.'
+      ], color: '#f0b429' },
+      { pos: '0 3.5 -5', title: 'A MATRIX: NEWTONS LAWS', lines: [
+        'A = [-0.50  +0.00  +0.30]',
+        '    [+0.00  -0.80  -2.00]',
+        '    [+0.00  +0.10  -0.40]',
+        '',
+        'Diagonal = friction (all negative).',
+        'A(2,3)=-2.0 = Coriolis coupling.',
+        'Spinning robot pushes sideways.',
+        '',
+        'Every entry comes from F=ma and',
+        'your specific robot geometry.',
+        'Change the mass? Change A.',
+        'Change the wheelbase? Change A.'
+      ], color: '#5ba4cf' },
+      { pos: '0 0.5 -6', title: 'DESIGN INSIGHT', lines: [
+        'Notice how the trails CURVE.',
+        'They dont go straight to the origin.',
+        'The curving is from coupling terms.',
+        '',
+        'Stronger coupling = more curving.',
+        'The swerve trails curve more than',
+        'the thermostat because A(2,3)=-2.0',
+        'is a strong off-diagonal coupling.',
+        '',
+        'Eigenvectors are the directions',
+        'where trails DO go straight.'
+      ], color: '#8899aa' }
+    ]
+  }
+};
+
+let currentSystem = 'thermostat';
+let showTrails = true;
+
+// ═══════════════════════════════════════
+// EIGEN COMPUTATION
+// ═══════════════════════════════════════
+function eigenvalues2x2(A) {
+  const a=A[0][0],b=A[0][1],c=A[1][0],d=A[1][1],tr=a+d,det=a*d-b*c,disc=tr*tr-4*det;
+  if(disc>=0) return [{re:(tr+Math.sqrt(disc))/2,im:0},{re:(tr-Math.sqrt(disc))/2,im:0}];
+  return [{re:tr/2,im:Math.sqrt(-disc)/2},{re:tr/2,im:-Math.sqrt(-disc)/2}];
+}
+function eigenvectors2x2(A, evals) {
+  return evals.map(ev => {
+    if(Math.abs(ev.im)>1e-10) return {x:1,y:0,z:0};
+    const a=A[0][0]-ev.re,b=A[0][1];
+    if(Math.abs(b)>1e-10){const l=Math.sqrt(1+(a/b)*(a/b));return {x:1/l,y:(-a/b)/l,z:0};}
+    return Math.abs(a)>1e-10?{x:0,y:1,z:0}:{x:1,y:0,z:0};
+  });
+}
+function eigenvalues3x3(A) {
+  const tr=A[0][0]+A[1][1]+A[2][2];
+  const p=A[0][0]*A[1][1]-A[0][1]*A[1][0]+A[0][0]*A[2][2]-A[0][2]*A[2][0]+A[1][1]*A[2][2]-A[1][2]*A[2][1];
+  const det=A[0][0]*(A[1][1]*A[2][2]-A[1][2]*A[2][1])-A[0][1]*(A[1][0]*A[2][2]-A[1][2]*A[2][0])+A[0][2]*(A[1][0]*A[2][1]-A[1][1]*A[2][0]);
+  const a2=-tr,a1=p,a0=-det,Q=(3*a1-a2*a2)/9,R=(9*a2*a1-27*a0-2*a2*a2*a2)/54,D=Q*Q*Q+R*R;
+  const res=[];
+  if(D<=0){const th=Math.acos(R/Math.sqrt(-Q*Q*Q)),sq=2*Math.sqrt(-Q);
+    res.push({re:sq*Math.cos(th/3)-a2/3,im:0});
+    res.push({re:sq*Math.cos((th+2*Math.PI)/3)-a2/3,im:0});
+    res.push({re:sq*Math.cos((th+4*Math.PI)/3)-a2/3,im:0});
+  } else {const sd=Math.sqrt(D),S=Math.cbrt(R+sd),T=Math.cbrt(R-sd);
+    res.push({re:S+T-a2/3,im:0});
+    const rp=-(S+T)/2-a2/3,ip=Math.sqrt(3)/2*(S-T);
+    res.push({re:rp,im:ip});res.push({re:rp,im:-ip});
+  } return res;
+}
+function eigenvectors3x3(A, evals) {
+  return evals.map(ev => {
+    if(Math.abs(ev.im)>1e-8) return {x:0.577,y:0.577,z:0.577};
+    const l=ev.re,M=[[A[0][0]-l,A[0][1],A[0][2]],[A[1][0],A[1][1]-l,A[1][2]],[A[2][0],A[2][1],A[2][2]-l]];
+    const r0=M[0],r1=M[1];
+    let v={x:r0[1]*r1[2]-r0[2]*r1[1],y:r0[2]*r1[0]-r0[0]*r1[2],z:r0[0]*r1[1]-r0[1]*r1[0]};
+    let len=Math.sqrt(v.x*v.x+v.y*v.y+v.z*v.z);
+    if(len<1e-10){const r2=M[2];v={x:r0[1]*r2[2]-r0[2]*r2[1],y:r0[2]*r2[0]-r0[0]*r2[2],z:r0[0]*r2[1]-r0[1]*r2[0]};len=Math.sqrt(v.x*v.x+v.y*v.y+v.z*v.z);}
+    if(len<1e-10)return{x:1,y:0,z:0};
+    return {x:v.x/len,y:v.y/len,z:v.z/len};
+  });
+}
+
+function simulateTrajectory(A, start, steps, dt, scale) {
+  const n=A.length;let state=[...start];const pts=[state.map(s=>s*scale)];
+  for(let i=0;i<steps;i++){
+    const ns=new Array(n).fill(0);
+    for(let r=0;r<n;r++)for(let c=0;c<n;c++)ns[r]+=A[r][c]*state[c];
+    state=state.map((s,idx)=>s+ns[idx]*dt);
+    state=state.map(s=>Math.max(-4,Math.min(4,s)));
+    pts.push(state.map(s=>s*scale));
+  } return pts;
+}
+
+// ═══════════════════════════════════════
+// SCENE BUILDING
+// ═══════════════════════════════════════
+function clearGroup(id){const el=document.getElementById(id);while(el.children.length>0)el.removeChild(el.children[0]);}
+
+function buildAxes(sys) {
+  clearGroup('axes-group');
+  const g=document.getElementById('axes-group'),ck=Object.keys(sys.colors),al=3.0;
+  sys.states.forEach((name,i)=>{
+    const color=sys.colors[ck[i]],end=[0,0,0],endN=[0,0,0];
+    if(i===0){end[0]=al;endN[0]=-al;}else if(i===1){end[1]=al;endN[1]=-al;}else{end[2]=al;endN[2]=-al;}
+    // Thick axis: multiple parallel lines for visibility
+    for(let off=-0.005;off<=0.005;off+=0.005){
+      const offEnd=[...end],offEndN=[...endN],offStart=[0,0,0];
+      if(i!==1){offEnd[1]+=off;offEndN[1]+=off;offStart[1]=off;}
+      else{offEnd[0]+=off;offEndN[0]+=off;offStart[0]=off;}
+      const pl=document.createElement('a-entity');
+      pl.setAttribute('line',`start:${offStart.join(' ')};end:${offEnd.join(' ')};color:${color};opacity:0.7`);
+      g.appendChild(pl);
+      const nl=document.createElement('a-entity');
+      nl.setAttribute('line',`start:${offStart.join(' ')};end:${offEndN.join(' ')};color:${color};opacity:0.25`);
+      g.appendChild(nl);
+    }
+    // Axis label at tip
+    const lbl=document.createElement('a-text');
+    const lp=[0,0,0];if(i===0)lp[0]=al+0.4;else if(i===1)lp[1]=al+0.4;else lp[2]=al+0.4;
+    lbl.setAttribute('value',`x${i+1}: ${name}`);lbl.setAttribute('position',lp.join(' '));
+    lbl.setAttribute('color',color);lbl.setAttribute('align','center');
+    lbl.setAttribute('width','4');lbl.setAttribute('side','double');lbl.setAttribute('look-at','[camera]');
+    g.appendChild(lbl);
+    // Tick marks
+    for(let t=1;t<=2;t++){
+      const tick=document.createElement('a-sphere');
+      const tp=[0,0,0];if(i===0)tp[0]=t*al/2.5;else if(i===1)tp[1]=t*al/2.5;else tp[2]=t*al/2.5;
+      tick.setAttribute('position',tp.join(' '));tick.setAttribute('radius','0.02');
+      tick.setAttribute('color',color);tick.setAttribute('opacity','0.5');
+      g.appendChild(tick);
+    }
+  });
+  // Grid plane
+  const n=sys.states.length;
+  for(let x=-5;x<=5;x++)for(let z=-5;z<=5;z++){
+    if(!x&&!z)continue;
+    const d=document.createElement('a-sphere');
+    d.setAttribute('position',n===2?`${x*0.5} ${z*0.5} 0`:`${x*0.5} 0 ${z*0.5}`);
+    d.setAttribute('radius','0.008');d.setAttribute('color','#223344');d.setAttribute('opacity','0.25');
+    g.appendChild(d);
+  }
+}
+
+function buildEigenvectors(sys) {
+  clearGroup('eigenvector-group');
+  const g=document.getElementById('eigenvector-group'),A=sys.A,n=A.length;
+  let evals,evecs;
+  if(n===2){evals=eigenvalues2x2(A);evecs=eigenvectors2x2(A,evals);}
+  else{evals=eigenvalues3x3(A);evecs=eigenvectors3x3(A,evals);}
+  const cols=['#f0b429','#6bbf8a','#e8634f'];
+  evals.forEach((ev,i)=>{
+    if(Math.abs(ev.im)>0.01)return;
+    const v=evecs[i],al=2.2,c=cols[i%3],unstable=ev.re>0.001;
+    const ep={x:v.x*al,y:v.y*al,z:n===2?0:v.z*al};
+    // Arrow shaft (multiple lines for thickness)
+    for(let off=-0.008;off<=0.008;off+=0.004){
+      const sh=document.createElement('a-entity');
+      const offy=n===2?off:0,offz=n===2?0:off;
+      sh.setAttribute('line',`start:0 ${offy} ${offz};end:${ep.x} ${ep.y+offy} ${ep.z+offz};color:${c};opacity:0.9`);
+      g.appendChild(sh);
+    }
+    // Negative direction
+    const ns=document.createElement('a-entity');
+    ns.setAttribute('line',`start:0 0 0;end:${-ep.x} ${-ep.y} ${-ep.z};color:${c};opacity:0.3`);
+    g.appendChild(ns);
+    // Arrowhead cone
+    const tip=document.createElement('a-cone');
+    tip.setAttribute('position',`${ep.x} ${ep.y} ${ep.z}`);
+    tip.setAttribute('radius-bottom','0.06');tip.setAttribute('radius-top','0');tip.setAttribute('height','0.15');
+    tip.setAttribute('color',c);tip.setAttribute('opacity','0.95');
+    if(unstable)tip.setAttribute('animation','property:scale;to:1.6 1.6 1.6;dur:400;dir:alternate;loop:true');
+    g.appendChild(tip);
+    // Label with eigenvalue and description
+    const lbl=document.createElement('a-text');
+    lbl.setAttribute('position',`${ep.x*1.15} ${ep.y*1.15+0.15} ${ep.z*1.15}`);
+    const speed=Math.abs(ev.re)<0.05?'SLOW':Math.abs(ev.re)<0.2?'MEDIUM':'FAST';
+    const evStr=`Eigenvalue ${i+1}: ${ev.re.toFixed(3)}\n${unstable?'UNSTABLE - grows!':'stable - decays'}\n${speed} mode`;
+    lbl.setAttribute('value',evStr);
+    lbl.setAttribute('color',unstable?'#e8634f':'#6bbf8a');
+    lbl.setAttribute('align','center');lbl.setAttribute('width','3');
+    lbl.setAttribute('side','double');lbl.setAttribute('look-at','[camera]');
+    g.appendChild(lbl);
+    // Eigenvector components label
+    const vlbl=document.createElement('a-text');
+    vlbl.setAttribute('position',`${ep.x*0.5} ${ep.y*0.5-0.15} ${ep.z*0.5}`);
+    const parts=[v.x.toFixed(2),v.y.toFixed(2)];if(n>2)parts.push(v.z.toFixed(2));
+    vlbl.setAttribute('value',`v=[${parts.join(', ')}]`);
+    vlbl.setAttribute('color',c);vlbl.setAttribute('align','center');vlbl.setAttribute('width','2.5');
+    vlbl.setAttribute('side','double');vlbl.setAttribute('look-at','[camera]');
+    g.appendChild(vlbl);
+  });
+  return {eigenvals:evals,eigenvecs:evecs};
+}
+
+function buildCouplings(sys) {
+  clearGroup('coupling-group');
+  if(!sys.couplings) return;
+  const g=document.getElementById('coupling-group'),n=sys.states.length;
+  sys.couplings.forEach(cp=>{
+    // Draw curved arrow between axis endpoints to show coupling
+    const offset=1.2;
+    const from=[0,0,0],to=[0,0,0];
+    if(cp.from===0)from[0]=offset;else if(cp.from===1)from[1]=offset;else from[2]=offset;
+    if(cp.to===0)to[0]=offset;else if(cp.to===1)to[1]=offset;else to[2]=offset;
+    // Midpoint with offset for curve
+    const mid=[(from[0]+to[0])/2,(from[1]+to[1])/2,(from[2]+to[2])/2];
+    // Push midpoint outward
+    const len=Math.sqrt(mid[0]*mid[0]+mid[1]*mid[1]+mid[2]*mid[2]);
+    if(len>0.01){mid[0]+=mid[0]/len*0.4;mid[1]+=mid[1]/len*0.4;mid[2]+=mid[2]/len*0.4;}
+    else{mid[1]+=0.4;}
+    // Draw as two line segments through midpoint
+    const l1=document.createElement('a-entity');
+    l1.setAttribute('line',`start:${from.join(' ')};end:${mid.join(' ')};color:${cp.color};opacity:0.5`);
+    g.appendChild(l1);
+    const l2=document.createElement('a-entity');
+    l2.setAttribute('line',`start:${mid.join(' ')};end:${to.join(' ')};color:${cp.color};opacity:0.5`);
+    g.appendChild(l2);
+    // Label at midpoint
+    const lbl=document.createElement('a-text');
+    lbl.setAttribute('position',`${mid[0]} ${mid[1]+0.12} ${mid[2]}`);
+    lbl.setAttribute('value',cp.label);lbl.setAttribute('color',cp.color);
+    lbl.setAttribute('align','center');lbl.setAttribute('width','2.5');
+    lbl.setAttribute('side','double');lbl.setAttribute('look-at','[camera]');
+    lbl.setAttribute('opacity','0.85');
+    g.appendChild(lbl);
+    // Small marker at midpoint
+    const mk=document.createElement('a-sphere');
+    mk.setAttribute('position',mid.join(' '));mk.setAttribute('radius','0.025');
+    mk.setAttribute('color',cp.color);mk.setAttribute('opacity','0.7');
+    g.appendChild(mk);
+  });
+}
+
+function buildTrajectories(sys) {
+  clearGroup('trajectory-group');
+  const g=document.getElementById('trajectory-group'),n=sys.A.length;
+  const dt=0.05,steps=500;
+  const tcols=['#5ba4cf','#e8634f','#6bbf8a','#f0b429','#a78bfa','#f472b6','#38bdf8','#fb923c'];
+  sys.initialPoints.forEach((pt,pi)=>{
+    const traj=simulateTrajectory(sys.A,pt,steps,dt,sys.scale);
+    const c=tcols[pi%8];
+    // Start marker (larger)
+    const sp=traj[0];
+    const sm=document.createElement('a-sphere');
+    sm.setAttribute('position',n===2?`${sp[0]} ${sp[1]} 0`:`${sp[0]} ${sp[1]} ${sp[2]}`);
+    sm.setAttribute('radius','0.05');sm.setAttribute('color',c);
+    g.appendChild(sm);
+    // Trail lines
+    for(let i=2;i<traj.length;i+=2){
+      const p=traj[i],prev=traj[i-2];
+      const pos=n===2?`${p[0]} ${p[1]} 0`:`${p[0]} ${p[1]} ${p[2]}`;
+      const prevPos=n===2?`${prev[0]} ${prev[1]} 0`:`${prev[0]} ${prev[1]} ${prev[2]}`;
+      const op=Math.max(0.08,0.8-i/traj.length);
+      const ln=document.createElement('a-entity');
+      ln.setAttribute('line',`start:${prevPos};end:${pos};color:${c};opacity:${op}`);
+      g.appendChild(ln);
+      // Dots along trail for directionality
+      if(i%12===0){
+        const dot=document.createElement('a-sphere');
+        dot.setAttribute('position',pos);dot.setAttribute('radius',String(0.018-i/traj.length*0.01));
+        dot.setAttribute('color',c);dot.setAttribute('opacity',String(op));
+        g.appendChild(dot);
+      }
+    }
+    // End marker
+    const ep=traj[traj.length-1];
+    const em=document.createElement('a-sphere');
+    em.setAttribute('position',n===2?`${ep[0]} ${ep[1]} 0`:`${ep[0]} ${ep[1]} ${ep[2]}`);
+    em.setAttribute('radius','0.02');em.setAttribute('color',c);em.setAttribute('opacity','0.5');
+    g.appendChild(em);
+  });
+}
+
+function buildBoards(sys, edata) {
+  clearGroup('board-group');
+  const g=document.getElementById('board-group');
+  if(!sys.boards) return;
+  sys.boards.forEach(b=>{
+    const panel=document.createElement('a-entity');
+    panel.setAttribute('position',b.pos);
+    // Background
+    const bg=document.createElement('a-plane');
+    const lineCount=b.lines.length;
+    const h=Math.max(1.2, lineCount*0.14+0.6);
+    bg.setAttribute('width','2.8');bg.setAttribute('height',String(h));
+    bg.setAttribute('color','#0f1720');bg.setAttribute('opacity','0.92');bg.setAttribute('side','double');
+    bg.setAttribute('material','shader:flat');
+    panel.appendChild(bg);
+    // Border
+    const border=document.createElement('a-plane');
+    border.setAttribute('width','2.82');border.setAttribute('height',String(h+0.02));
+    border.setAttribute('color',b.color);border.setAttribute('opacity','0.4');border.setAttribute('side','double');
+    border.setAttribute('position','0 0 -0.001');border.setAttribute('material','shader:flat');
+    panel.appendChild(border);
+    // Title
+    const title=document.createElement('a-text');
+    title.setAttribute('value',b.title);title.setAttribute('position',`0 ${h/2-0.15} 0.01`);
+    title.setAttribute('color',b.color);title.setAttribute('align','center');title.setAttribute('width','2.6');
+    title.setAttribute('font','monoid');
+    panel.appendChild(title);
+    // Body lines
+    b.lines.forEach((line,li)=>{
+      const txt=document.createElement('a-text');
+      txt.setAttribute('value',line);
+      txt.setAttribute('position',`0 ${h/2-0.35-li*0.135} 0.01`);
+      txt.setAttribute('color',line===''?'#0f1720':'#c0cdd8');
+      txt.setAttribute('align','center');txt.setAttribute('width','2.3');
+      panel.appendChild(txt);
+    });
+    panel.setAttribute('look-at','[camera]');
+    g.appendChild(panel);
+  });
+}
+
+function updateInfoPanel(sys, edata) {
+  document.getElementById('system-name').textContent=sys.name;
+  let eh='<div style="color:#5ba4cf;margin-bottom:4px;">Eigenvalues:</div>';
+  edata.eigenvals.forEach((ev,i)=>{
+    const stable=ev.re<-0.001,cls=stable?'stable':'unstable';
+    const s=Math.abs(ev.im)>0.01?`${ev.re.toFixed(3)}+${ev.im.toFixed(3)}j`:`${ev.re.toFixed(3)}`;
+    eh+=`<div class="eigen-row"><span>L${i+1}=${s}</span><span class="${cls}">${stable?'stable':'UNSTABLE'}</span></div>`;
+  });
+  document.getElementById('eigen-info').innerHTML=eh;
+  let vh='<div style="color:#5ba4cf;margin-bottom:4px;">Eigenvectors:</div>';
+  edata.eigenvecs.forEach((v,i)=>{
+    const p=[v.x.toFixed(2),v.y.toFixed(2)];if(sys.states.length>2)p.push(v.z.toFixed(2));
+    vh+=`<div style="color:#c0cdd8;">v${i+1}=[${p.join(', ')}]</div>`;
+  });
+  document.getElementById('evec-info').innerHTML=vh;
+  document.getElementById('physics-info').innerHTML=sys.boards?sys.boards[0].lines.slice(0,3).join(' '):'';
+}
+
+// ═══════════════════════════════════════
+// SWITCHING & CONTROLS
+// ═══════════════════════════════════════
+function switchSystem(name) {
+  currentSystem=name;
+  const sys=SYSTEMS[name];
+  document.querySelectorAll('#controls button').forEach(b=>b.classList.remove('active'));
+  const btn=document.getElementById('btn-'+name);if(btn)btn.classList.add('active');
+  buildAxes(sys);
+  const ed=buildEigenvectors(sys);
+  buildCouplings(sys);
+  buildTrajectories(sys);
+  buildBoards(sys,ed);
+  updateInfoPanel(sys,ed);
+}
+
+function toggleTrajectories(){
+  showTrails=!showTrails;
+  document.getElementById('trajectory-group').setAttribute('visible',showTrails);
+}
+function resetTrajectories(){buildTrajectories(SYSTEMS[currentSystem]);}
+
+document.addEventListener('DOMContentLoaded',()=>{
+  const scene=document.querySelector('a-scene');
+  const init=()=>switchSystem('thermostat');
+  if(scene.hasLoaded)init();else scene.addEventListener('loaded',init);
+});
+</script>
+</body>
+</html>
