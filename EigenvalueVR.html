@@ -1,0 +1,423 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Control Theory VR - Eigenvalue Visualizer</title>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/aframe/1.4.2/aframe.min.js"></script>
+  <style>
+    body { margin: 0; overflow: hidden; background: #0a0a1a; }
+    #overlay {
+      position: fixed; top: 0; left: 0; width: 100%; z-index: 999;
+      background: rgba(10,10,26,0.85); color: #c0cdd8; font-family: 'Courier New', monospace;
+      padding: 12px 16px; font-size: 13px; pointer-events: none;
+    }
+    #overlay h1 { margin: 0 0 4px; font-size: 16px; color: #5ba4cf; }
+    #overlay p { margin: 2px 0; font-size: 11px; color: #8899aa; }
+    #controls {
+      position: fixed; bottom: 0; left: 0; width: 100%; z-index: 999;
+      background: rgba(10,10,26,0.9); padding: 10px 16px; pointer-events: auto;
+      font-family: 'Courier New', monospace; color: #c0cdd8; font-size: 12px;
+      display: flex; gap: 16px; align-items: center; flex-wrap: wrap;
+    }
+    #controls button {
+      background: #1a2332; color: #5ba4cf; border: 1px solid #5ba4cf;
+      padding: 6px 14px; border-radius: 4px; cursor: pointer;
+      font-family: inherit; font-size: 12px;
+    }
+    #controls button:hover { background: #5ba4cf; color: #0a0a1a; }
+    #controls button.active { background: #5ba4cf; color: #0a0a1a; }
+    #controls label { color: #8899aa; font-size: 11px; }
+    #info-panel {
+      position: fixed; top: 60px; right: 12px; width: 260px; z-index: 999;
+      background: rgba(26,35,50,0.92); border: 1px solid rgba(91,164,207,0.3);
+      border-radius: 8px; padding: 12px; font-family: 'Courier New', monospace;
+      color: #c0cdd8; font-size: 11px; pointer-events: none;
+    }
+    #info-panel h3 { margin: 0 0 6px; color: #f0b429; font-size: 13px; }
+    .eigen-row { display: flex; justify-content: space-between; margin: 3px 0; }
+    .stable { color: #6bbf8a; }
+    .unstable { color: #e8634f; }
+  </style>
+</head>
+<body>
+
+<div id="overlay">
+  <h1>Control Theory VR -- Eigenvalue Visualizer</h1>
+  <p>Walk around the state-space. Eigenvectors are arrows. Trajectories show system behavior over time.</p>
+  <p>On Quest: open in browser, tap VR goggles icon (bottom right)</p>
+</div>
+
+<div id="info-panel">
+  <h3 id="system-name">Thermostat System</h3>
+  <div id="eigen-info"></div>
+  <div id="evec-info" style="margin-top:8px;"></div>
+  <div id="physics-info" style="margin-top:8px; color:#8899aa;"></div>
+</div>
+
+<div id="controls">
+  <button id="btn-thermostat" class="active" onclick="switchSystem('thermostat')">Thermostat</button>
+  <button id="btn-wedding" onclick="switchSystem('wedding')">Wedding</button>
+  <button id="btn-swerve" onclick="switchSystem('swerve')">Swerve Drive</button>
+  <span style="color:#5ba4cf;">|</span>
+  <button onclick="toggleTrajectories()">Toggle Trails</button>
+  <button onclick="resetTrajectories()">Reset Trails</button>
+  <label>Speed: <input type="range" id="speed-slider" min="0.1" max="3" step="0.1" value="1" style="width:80px;vertical-align:middle;"></label>
+</div>
+
+<a-scene
+  vr-mode-ui="enabled: true"
+  renderer="antialias: true; colorManagement: true"
+  background="color: #0a0a1a"
+>
+  <a-entity light="type: ambient; color: #334455; intensity: 0.4"></a-entity>
+  <a-entity light="type: directional; color: #aabbcc; intensity: 0.6" position="2 4 3"></a-entity>
+  <a-entity light="type: point; color: #5ba4cf; intensity: 0.3" position="0 3 0"></a-entity>
+
+  <a-entity id="grid-floor" position="0 0 0"></a-entity>
+  <a-entity id="axes-group" position="0 1.5 -3"></a-entity>
+  <a-entity id="eigenvector-group" position="0 1.5 -3"></a-entity>
+  <a-entity id="trajectory-group" position="0 1.5 -3"></a-entity>
+
+  <a-entity id="origin-marker" position="0 1.5 -3">
+    <a-sphere radius="0.06" color="#f0b429" opacity="0.9"
+      animation="property: scale; to: 1.2 1.2 1.2; dur: 1000; dir: alternate; loop: true; easing: easeInOutSine">
+    </a-sphere>
+  </a-entity>
+
+  <a-entity id="board-group" position="0 1.5 -3"></a-entity>
+
+  <a-entity id="rig" position="0 0 2">
+    <a-camera position="0 1.6 0" look-controls wasd-controls="acceleration: 10"></a-camera>
+  </a-entity>
+</a-scene>
+
+<script>
+const SYSTEMS = {
+  thermostat: {
+    name: "Thermostat System",
+    states: ["Room Temp", "Wall Temp"],
+    A: [[-0.10, 0.10], [0.05, -0.08]],
+    scale: 8,
+    description: "2-state thermal system. Room air and wall mass exchange heat. Both eigenvalues negative = stable.",
+    colors: { axis1: "#e8634f", axis2: "#5ba4cf" },
+    initialPoints: [[1, 0.2], [-0.5, 1], [1, 1], [-1, -0.5], [0.8, -0.8], [-0.3, 0.7]]
+  },
+  wedding: {
+    name: "Wedding Reception",
+    states: ["Dance", "BAC", "Noise"],
+    A: [[-0.2, 1.5, 0.3], [0.0, -0.1, 0.0], [0.6, 0.8, -0.3]],
+    scale: 3,
+    description: "3-state party dynamics. Alcohol drives dancing and noise. Reinforcing loop makes one mode unstable.",
+    colors: { axis1: "#e8634f", axis2: "#f0b429", axis3: "#5ba4cf" },
+    initialPoints: [[1, 0.3, 0.5], [0.2, 1, 0.1], [0.5, 0.5, 1], [-0.5, 0.8, 0.3], [1, 1, 1], [0.1, 0.1, 0.8]]
+  },
+  swerve: {
+    name: "Swerve Drive (simplified)",
+    states: ["Vx fwd", "Vy lat", "Yaw rate"],
+    A: [[-0.5, 0.0, 0.3], [0.0, -0.8, -2.0], [0.0, 0.1, -0.4]],
+    scale: 3,
+    description: "3-state rigid body. Friction damps velocity. Yaw couples into lateral drift via Coriolis. All stable.",
+    colors: { axis1: "#e8634f", axis2: "#6bbf8a", axis3: "#5ba4cf" },
+    initialPoints: [[1, 0.5, 0.2], [0.3, 1, -0.3], [-0.5, 0.5, 1], [1, -1, 0.5], [0.8, 0.2, 0.8], [-0.3, -0.5, -0.5]]
+  }
+};
+
+let currentSystem = 'thermostat';
+let showTrails = true;
+
+function eigenvalues2x2(A) {
+  const a=A[0][0], b=A[0][1], c=A[1][0], d=A[1][1];
+  const tr=a+d, det=a*d-b*c, disc=tr*tr-4*det;
+  if (disc>=0) return [{re:(tr+Math.sqrt(disc))/2,im:0},{re:(tr-Math.sqrt(disc))/2,im:0}];
+  return [{re:tr/2,im:Math.sqrt(-disc)/2},{re:tr/2,im:-Math.sqrt(-disc)/2}];
+}
+
+function eigenvectors2x2(A, evals) {
+  return evals.map(ev => {
+    if (Math.abs(ev.im)>1e-10) return {x:1,y:0,z:0};
+    const a=A[0][0]-ev.re, b=A[0][1];
+    if (Math.abs(b)>1e-10) { const l=Math.sqrt(1+(a/b)*(a/b)); return {x:1/l,y:(-a/b)/l,z:0}; }
+    if (Math.abs(a)>1e-10) return {x:0,y:1,z:0};
+    return {x:1,y:0,z:0};
+  });
+}
+
+function eigenvalues3x3(A) {
+  const tr=A[0][0]+A[1][1]+A[2][2];
+  const p=A[0][0]*A[1][1]-A[0][1]*A[1][0]+A[0][0]*A[2][2]-A[0][2]*A[2][0]+A[1][1]*A[2][2]-A[1][2]*A[2][1];
+  const det=A[0][0]*(A[1][1]*A[2][2]-A[1][2]*A[2][1])-A[0][1]*(A[1][0]*A[2][2]-A[1][2]*A[2][0])+A[0][2]*(A[1][0]*A[2][1]-A[1][1]*A[2][0]);
+  const a2=-tr, a1=p, a0=-det;
+  const Q=(3*a1-a2*a2)/9, R=(9*a2*a1-27*a0-2*a2*a2*a2)/54, D=Q*Q*Q+R*R;
+  const results=[];
+  if (D<=0) {
+    const theta=Math.acos(R/Math.sqrt(-Q*Q*Q)), sq=2*Math.sqrt(-Q);
+    results.push({re:sq*Math.cos(theta/3)-a2/3,im:0});
+    results.push({re:sq*Math.cos((theta+2*Math.PI)/3)-a2/3,im:0});
+    results.push({re:sq*Math.cos((theta+4*Math.PI)/3)-a2/3,im:0});
+  } else {
+    const sd=Math.sqrt(D), S=Math.cbrt(R+sd), T=Math.cbrt(R-sd);
+    results.push({re:S+T-a2/3,im:0});
+    const rp=-(S+T)/2-a2/3, ip=Math.sqrt(3)/2*(S-T);
+    results.push({re:rp,im:ip}); results.push({re:rp,im:-ip});
+  }
+  return results;
+}
+
+function eigenvectors3x3(A, evals) {
+  return evals.map(ev => {
+    if (Math.abs(ev.im)>1e-8) return {x:0.577,y:0.577,z:0.577};
+    const l=ev.re;
+    const M=[[A[0][0]-l,A[0][1],A[0][2]],[A[1][0],A[1][1]-l,A[1][2]],[A[2][0],A[2][1],A[2][2]-l]];
+    const r0=M[0], r1=M[1];
+    let v={x:r0[1]*r1[2]-r0[2]*r1[1], y:r0[2]*r1[0]-r0[0]*r1[2], z:r0[0]*r1[1]-r0[1]*r1[0]};
+    let len=Math.sqrt(v.x*v.x+v.y*v.y+v.z*v.z);
+    if (len<1e-10) {
+      const r2=M[2];
+      v={x:r0[1]*r2[2]-r0[2]*r2[1], y:r0[2]*r2[0]-r0[0]*r2[2], z:r0[0]*r2[1]-r0[1]*r2[0]};
+      len=Math.sqrt(v.x*v.x+v.y*v.y+v.z*v.z);
+    }
+    if (len<1e-10) return {x:1,y:0,z:0};
+    return {x:v.x/len, y:v.y/len, z:v.z/len};
+  });
+}
+
+function simulateTrajectory(A, start, steps, dt, scale) {
+  const n=A.length; let state=[...start];
+  const pts=[state.map(s=>s*scale)];
+  for (let i=0; i<steps; i++) {
+    const ns=new Array(n).fill(0);
+    for (let r=0;r<n;r++) for (let c=0;c<n;c++) ns[r]+=A[r][c]*state[c];
+    state=state.map((s,idx)=>s+ns[idx]*dt);
+    state=state.map(s=>Math.max(-3,Math.min(3,s)));
+    pts.push(state.map(s=>s*scale));
+  }
+  return pts;
+}
+
+function clearGroup(id) {
+  const el=document.getElementById(id);
+  while (el.children.length>0) el.removeChild(el.children[0]);
+}
+
+function buildAxes(sys) {
+  clearGroup('axes-group');
+  const g=document.getElementById('axes-group');
+  const colorKeys=Object.keys(sys.colors), axLen=2.5;
+  sys.states.forEach((name,i) => {
+    const color=sys.colors[colorKeys[i]];
+    const end=[0,0,0], endN=[0,0,0];
+    if(i===0){end[0]=axLen;endN[0]=-axLen;}
+    else if(i===1){end[1]=axLen;endN[1]=-axLen;}
+    else{end[2]=axLen;endN[2]=-axLen;}
+    const pl=document.createElement('a-entity');
+    pl.setAttribute('line',`start:0 0 0;end:${end.join(' ')};color:${color};opacity:0.6`);
+    g.appendChild(pl);
+    const nl=document.createElement('a-entity');
+    nl.setAttribute('line',`start:0 0 0;end:${endN.join(' ')};color:${color};opacity:0.2`);
+    g.appendChild(nl);
+    const lbl=document.createElement('a-text');
+    const lp=[0,0,0]; if(i===0)lp[0]=axLen+0.3;else if(i===1)lp[1]=axLen+0.3;else lp[2]=axLen+0.3;
+    lbl.setAttribute('value',name); lbl.setAttribute('position',lp.join(' '));
+    lbl.setAttribute('color',color); lbl.setAttribute('align','center');
+    lbl.setAttribute('width','3'); lbl.setAttribute('side','double');
+    lbl.setAttribute('look-at','[camera]');
+    g.appendChild(lbl);
+  });
+  // Grid dots
+  for (let x=-4;x<=4;x+=1) for (let z=-4;z<=4;z+=1) {
+    if(!x&&!z) continue;
+    const d=document.createElement('a-sphere');
+    d.setAttribute('position', sys.states.length===2?`${x*0.5} ${z*0.5} 0`:`${x*0.5} 0 ${z*0.5}`);
+    d.setAttribute('radius','0.01'); d.setAttribute('color','#334455'); d.setAttribute('opacity','0.3');
+    g.appendChild(d);
+  }
+}
+
+function buildEigenvectors(sys) {
+  clearGroup('eigenvector-group');
+  const g=document.getElementById('eigenvector-group');
+  const A=sys.A, n=A.length;
+  let evals, evecs;
+  if(n===2){evals=eigenvalues2x2(A);evecs=eigenvectors2x2(A,evals);}
+  else{evals=eigenvalues3x3(A);evecs=eigenvectors3x3(A,evals);}
+  const cols=['#f0b429','#6bbf8a','#e8634f'];
+  evals.forEach((ev,i) => {
+    if(Math.abs(ev.im)>0.01) return;
+    const v=evecs[i], al=2.0, c=cols[i%3], unstable=ev.re>0.001;
+    const ep={x:v.x*al, y:v.y*al, z:n===2?0:v.z*al};
+    const sh=document.createElement('a-entity');
+    sh.setAttribute('line',`start:0 0 0;end:${ep.x} ${ep.y} ${ep.z};color:${c};opacity:0.9`);
+    g.appendChild(sh);
+    const ns=document.createElement('a-entity');
+    ns.setAttribute('line',`start:0 0 0;end:${-ep.x} ${-ep.y} ${-ep.z};color:${c};opacity:0.4`);
+    g.appendChild(ns);
+    const tip=document.createElement('a-sphere');
+    tip.setAttribute('position',`${ep.x} ${ep.y} ${ep.z}`);
+    tip.setAttribute('radius','0.06'); tip.setAttribute('color',c);
+    if(unstable) tip.setAttribute('animation','property:scale;to:1.5 1.5 1.5;dur:500;dir:alternate;loop:true');
+    g.appendChild(tip);
+    const lbl=document.createElement('a-text');
+    lbl.setAttribute('position',`${ep.x+0.15} ${ep.y+0.15} ${ep.z}`);
+    const s=`L${i+1}=${ev.re.toFixed(3)}${unstable?' UNSTABLE':' stable'}`;
+    lbl.setAttribute('value',s); lbl.setAttribute('color',unstable?'#e8634f':'#6bbf8a');
+    lbl.setAttribute('align','left'); lbl.setAttribute('width','4');
+    lbl.setAttribute('side','double'); lbl.setAttribute('look-at','[camera]');
+    g.appendChild(lbl);
+  });
+  return {eigenvals:evals, eigenvecs:evecs};
+}
+
+function buildTrajectories(sys) {
+  clearGroup('trajectory-group');
+  const g=document.getElementById('trajectory-group');
+  const speed=parseFloat(document.getElementById('speed-slider').value);
+  const dt=0.05*speed, steps=Math.floor(400/speed), n=sys.A.length;
+  const tcols=['#5ba4cf','#e8634f','#6bbf8a','#f0b429','#a78bfa','#f472b6'];
+  sys.initialPoints.forEach((pt,pi) => {
+    const traj=simulateTrajectory(sys.A,pt,steps,dt,sys.scale);
+    const c=tcols[pi%6];
+    // Starting marker
+    const sp=traj[0];
+    const sm=document.createElement('a-sphere');
+    sm.setAttribute('position',n===2?`${sp[0]} ${sp[1]} 0`:`${sp[0]} ${sp[1]} ${sp[2]}`);
+    sm.setAttribute('radius','0.05'); sm.setAttribute('color',c); sm.setAttribute('opacity','1');
+    g.appendChild(sm);
+    // Trail
+    for (let i=3;i<traj.length;i+=3) {
+      const p=traj[i], prev=traj[i-3];
+      const pos=n===2?`${p[0]} ${p[1]} 0`:`${p[0]} ${p[1]} ${p[2]}`;
+      const prevPos=n===2?`${prev[0]} ${prev[1]} 0`:`${prev[0]} ${prev[1]} ${prev[2]}`;
+      const op=Math.max(0.1, 0.7-i/traj.length);
+      const ln=document.createElement('a-entity');
+      ln.setAttribute('line',`start:${prevPos};end:${pos};color:${c};opacity:${op}`);
+      g.appendChild(ln);
+      if(i%9===0) {
+        const dot=document.createElement('a-sphere');
+        dot.setAttribute('position',pos);
+        dot.setAttribute('radius','0.012'); dot.setAttribute('color',c);
+        dot.setAttribute('opacity',String(op));
+        g.appendChild(dot);
+      }
+    }
+  });
+}
+
+function buildInfoBoards(sys, edata) {
+  clearGroup('board-group');
+  const g=document.getElementById('board-group');
+
+  // Left panel - system info
+  const lp=document.createElement('a-entity');
+  lp.setAttribute('position','-3 2.2 -1');
+  const lbg=document.createElement('a-plane');
+  lbg.setAttribute('width','2.4'); lbg.setAttribute('height','1.8');
+  lbg.setAttribute('color','#1a2332'); lbg.setAttribute('opacity','0.88'); lbg.setAttribute('side','double');
+  lp.appendChild(lbg);
+  const lt=document.createElement('a-text');
+  lt.setAttribute('value',sys.name); lt.setAttribute('position','0 0.7 0.01');
+  lt.setAttribute('color','#f0b429'); lt.setAttribute('align','center'); lt.setAttribute('width','2.2');
+  lp.appendChild(lt);
+  const ld=document.createElement('a-text');
+  ld.setAttribute('value',sys.description); ld.setAttribute('position','0 0.45 0.01');
+  ld.setAttribute('color','#8899aa'); ld.setAttribute('align','center'); ld.setAttribute('width','2');
+  lp.appendChild(ld);
+  edata.eigenvals.forEach((ev,i) => {
+    const et=document.createElement('a-text');
+    const stable=ev.re<-0.001;
+    const str=Math.abs(ev.im)>0.01
+      ?`L${i+1} = ${ev.re.toFixed(3)} + ${ev.im.toFixed(3)}j`
+      :`L${i+1} = ${ev.re.toFixed(3)}`;
+    et.setAttribute('value',str+(stable?'  [stable]':'  [UNSTABLE]'));
+    et.setAttribute('position',`0 ${0.15-i*0.18} 0.01`);
+    et.setAttribute('color',stable?'#6bbf8a':'#e8634f');
+    et.setAttribute('align','center'); et.setAttribute('width','2');
+    lp.appendChild(et);
+  });
+  const lh=document.createElement('a-text');
+  lh.setAttribute('value','Gold arrows = eigenvectors\nColored trails = system trajectories\nGold sphere = equilibrium (origin)');
+  lh.setAttribute('position','0 -0.5 0.01');
+  lh.setAttribute('color','#5ba4cf'); lh.setAttribute('align','center'); lh.setAttribute('width','1.8');
+  lp.appendChild(lh);
+  lp.setAttribute('look-at','[camera]');
+  g.appendChild(lp);
+
+  // Right panel - A matrix
+  const rp=document.createElement('a-entity');
+  rp.setAttribute('position','3 2.2 -1');
+  const rbg=document.createElement('a-plane');
+  rbg.setAttribute('width','2.2'); rbg.setAttribute('height','1.8');
+  rbg.setAttribute('color','#1a2332'); rbg.setAttribute('opacity','0.88'); rbg.setAttribute('side','double');
+  rp.appendChild(rbg);
+  const rt=document.createElement('a-text');
+  rt.setAttribute('value','A Matrix (System Dynamics)'); rt.setAttribute('position','0 0.7 0.01');
+  rt.setAttribute('color','#5ba4cf'); rt.setAttribute('align','center'); rt.setAttribute('width','2');
+  rp.appendChild(rt);
+  sys.A.forEach((row,r) => {
+    const rs='[ '+row.map(v=>(v>=0?'+':'')+v.toFixed(2)).join('  ')+' ]';
+    const rw=document.createElement('a-text');
+    rw.setAttribute('value',rs); rw.setAttribute('position',`0 ${0.35-r*0.22} 0.01`);
+    rw.setAttribute('color','#a8d4f0'); rw.setAttribute('align','center'); rw.setAttribute('width','2');
+    rp.appendChild(rw);
+  });
+  sys.states.forEach((name,i) => {
+    const sl=document.createElement('a-text');
+    sl.setAttribute('value',`x${i+1} = ${name}`);
+    sl.setAttribute('position',`0 ${-0.2-i*0.16} 0.01`);
+    sl.setAttribute('color','#8899aa'); sl.setAttribute('align','center'); sl.setAttribute('width','1.8');
+    rp.appendChild(sl);
+  });
+  rp.setAttribute('look-at','[camera]');
+  g.appendChild(rp);
+}
+
+function updateInfoPanel(sys, edata) {
+  document.getElementById('system-name').textContent=sys.name;
+  let eh='<div style="color:#5ba4cf;margin-bottom:4px;">Eigenvalues:</div>';
+  edata.eigenvals.forEach((ev,i) => {
+    const stable=ev.re<-0.001, cls=stable?'stable':'unstable';
+    const s=Math.abs(ev.im)>0.01?`${ev.re.toFixed(3)} + ${ev.im.toFixed(3)}j`:`${ev.re.toFixed(3)}`;
+    eh+=`<div class="eigen-row"><span>L${i+1} = ${s}</span><span class="${cls}">${stable?'stable':'UNSTABLE'}</span></div>`;
+  });
+  document.getElementById('eigen-info').innerHTML=eh;
+  let vh='<div style="color:#5ba4cf;margin-bottom:4px;">Eigenvectors (directions):</div>';
+  edata.eigenvecs.forEach((v,i) => {
+    const parts=[v.x.toFixed(2),v.y.toFixed(2)];
+    if(sys.states.length>2) parts.push(v.z.toFixed(2));
+    vh+=`<div style="color:#c0cdd8;">v${i+1} = [${parts.join(', ')}]</div>`;
+  });
+  document.getElementById('evec-info').innerHTML=vh;
+  document.getElementById('physics-info').innerHTML=sys.description;
+}
+
+function switchSystem(name) {
+  currentSystem=name;
+  const sys=SYSTEMS[name];
+  document.querySelectorAll('#controls button').forEach(b=>b.classList.remove('active'));
+  const btn=document.getElementById('btn-'+name);
+  if(btn) btn.classList.add('active');
+  buildAxes(sys);
+  const ed=buildEigenvectors(sys);
+  buildTrajectories(sys);
+  buildInfoBoards(sys,ed);
+  updateInfoPanel(sys,ed);
+}
+
+function toggleTrajectories() {
+  showTrails=!showTrails;
+  document.getElementById('trajectory-group').setAttribute('visible',showTrails);
+}
+
+function resetTrajectories() {
+  buildTrajectories(SYSTEMS[currentSystem]);
+}
+
+document.addEventListener('DOMContentLoaded', () => {
+  const scene=document.querySelector('a-scene');
+  const init=()=>switchSystem('thermostat');
+  if(scene.hasLoaded) init(); else scene.addEventListener('loaded',init);
+  document.getElementById('speed-slider').addEventListener('input',()=>buildTrajectories(SYSTEMS[currentSystem]));
+});
+</script>
+</body>
+</html>
