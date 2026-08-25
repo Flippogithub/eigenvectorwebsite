@@ -1,0 +1,334 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Control Theory VR Lab</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/aframe/1.4.2/aframe.min.js"></script>
+<style>
+*{box-sizing:border-box;margin:0}body{background:#0a0a1a;font-family:'Courier New',monospace;color:#c0cdd8}
+#setup{position:fixed;top:0;left:0;width:100%;z-index:999;background:rgba(10,10,26,0.95);padding:12px;font-size:12px;display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+#setup input{background:#1a2332;border:1px solid #5ba4cf;color:#e0e8f0;padding:4px 8px;border-radius:4px;font-family:inherit;font-size:11px;width:300px}
+#setup button{background:#028090;color:#fff;border:none;padding:4px 12px;border-radius:4px;cursor:pointer;font-family:inherit;font-size:11px}
+#setup span{color:#8899aa;font-size:10px}
+</style>
+</head>
+<body>
+<div id="setup">
+<span style="color:#f0b429;font-weight:700">VR Control Lab</span>
+<input id="worker-url" placeholder="Paste Cloudflare Worker URL here" value="">
+<button onclick="saveUrl()">Save</button>
+<span id="status">Enter VR to begin. All controls are inside the headset.</span>
+</div>
+
+<a-scene vr-mode-ui="enabled:true" renderer="antialias:true" background="color:#0a0a1a">
+<a-entity light="type:ambient;color:#334;intensity:0.5"></a-entity>
+<a-entity light="type:directional;color:#abc;intensity:0.6" position="2 4 3"></a-entity>
+
+<a-entity id="axes-group" position="0 1.2 -3"></a-entity>
+<a-entity id="evec-group" position="0 1.2 -3"></a-entity>
+<a-entity id="traj-group" position="0 1.2 -3"></a-entity>
+
+<a-entity id="origin" position="0 1.2 -3">
+<a-sphere radius="0.07" color="#f0b429" opacity="0.9" animation="property:scale;to:1.3 1.3 1.3;dur:1200;dir:alternate;loop:true"></a-sphere>
+</a-entity>
+
+<!-- VR CONTROL PANEL (left side) -->
+<a-entity id="control-panel" position="-2.5 1.4 -1.5" rotation="0 30 0">
+<!-- Background -->
+<a-plane width="1.6" height="2.8" color="#0f1720" opacity="0.94" side="double" material="shader:flat"></a-plane>
+<a-plane width="1.62" height="2.82" color="#5ba4cf" opacity="0.2" side="double" position="0 0 -0.002" material="shader:flat"></a-plane>
+<a-text value="A MATRIX" position="0 1.25 0.01" color="#5ba4cf" align="center" width="1.8" font="monoid"></a-text>
+<a-text id="sys-label" value="Thermostat" position="0 1.1 0.01" color="#f0b429" align="center" width="1.4"></a-text>
+<!-- System switch buttons -->
+<a-entity id="sys-buttons" position="0 0.9 0.01"></a-entity>
+<!-- A matrix +/- buttons -->
+<a-entity id="matrix-controls" position="0 0.5 0.01"></a-entity>
+</a-entity>
+
+<!-- EIGENVALUE PANEL (right side) -->
+<a-entity id="eigen-panel" position="2.5 1.4 -1.5" rotation="0 -30 0">
+<a-plane width="1.4" height="2.0" color="#0f1720" opacity="0.94" side="double" material="shader:flat"></a-plane>
+<a-plane width="1.42" height="2.02" color="#f0b429" opacity="0.2" side="double" position="0 0 -0.002" material="shader:flat"></a-plane>
+<a-text value="EIGENVALUES" position="0 0.85 0.01" color="#f0b429" align="center" width="1.6" font="monoid"></a-text>
+<a-entity id="eigen-readout" position="0 0.55 0.01"></a-entity>
+<a-text id="stab-text" value="STABLE" position="0 -0.6 0.01" color="#6bbf8a" align="center" width="1.8" font="monoid"></a-text>
+</a-entity>
+
+<!-- CHAT PANEL (behind, center) -->
+<a-entity id="chat-area" position="0 1.6 -4.5">
+<a-plane width="2.8" height="2.0" color="#0f1720" opacity="0.94" side="double" material="shader:flat"></a-plane>
+<a-plane width="2.82" height="2.02" color="#028090" opacity="0.2" side="double" position="0 0 -0.002" material="shader:flat"></a-plane>
+<a-text value="CLAUDE - VR TUTOR" position="0 0.85 0.01" color="#028090" align="center" width="2.4" font="monoid"></a-text>
+<a-text id="chat-display" value="Point and click the MIC button\nto ask a question by voice.\nOr click a preset question below." position="0 0.3 0.01" color="#c0cdd8" align="center" width="2.2" wrap-count="45"></a-text>
+<a-text id="chat-response" value="" position="0 -0.25 0.01" color="#e0e8f0" align="center" width="2.2" wrap-count="50"></a-text>
+<!-- Mic button -->
+<a-entity id="mic-btn" class="clickable" position="-1.0 -0.8 0.01">
+<a-circle radius="0.12" color="#028090" class="clickable"></a-circle>
+<a-text value="MIC" position="0 0 0.01" color="#fff" align="center" width="1" font="monoid"></a-text>
+</a-entity>
+<!-- Preset question buttons -->
+<a-entity id="preset-btns" position="0 -0.8 0.01"></a-entity>
+</a-entity>
+
+<!-- FLOOR -->
+<a-plane rotation="-90 0 0" width="14" height="14" color="#0f1720" opacity="0.4" material="shader:flat" position="0 0 -3"></a-plane>
+
+<!-- CAMERA RIG -->
+<a-entity id="rig" movement-controls position="0 0 1">
+<a-camera position="0 1.6 0" look-controls="pointerLockEnabled:false">
+<a-cursor color="#5ba4cf" fuse="false" raycaster="far:15;objects:.clickable"></a-cursor>
+</a-camera>
+<a-entity id="lhand" laser-controls="hand:left" raycaster="far:15;objects:.clickable"></a-entity>
+<a-entity id="rhand" laser-controls="hand:right" raycaster="far:15;objects:.clickable"></a-entity>
+</a-entity>
+</a-scene>
+
+<script>
+// ═══ LOCOMOTION ═══
+AFRAME.registerComponent('movement-controls',{
+init(){this.keys={};document.addEventListener('keydown',e=>this.keys[e.key.toLowerCase()]=true);document.addEventListener('keyup',e=>this.keys[e.key.toLowerCase()]=false)},
+tick(t,dt){if(!dt)return;const s=0.12,d=dt/1000;let mx=0,mz=0,ry=0;
+if(this.keys.w||this.keys.arrowup)mz=-1;if(this.keys.s||this.keys.arrowdown)mz=1;
+if(this.keys.a||this.keys.arrowleft)mx=-1;if(this.keys.d||this.keys.arrowright)mx=1;
+const gs=navigator.getGamepads?navigator.getGamepads():[];
+for(let i=0;i<gs.length;i++){const g=gs[i];if(!g||!g.axes)continue;
+if(g.mapping==='xr-standard'){if(g.hand==='left'&&g.axes.length>=4){if(Math.abs(g.axes[2])>.12)mx=g.axes[2];if(Math.abs(g.axes[3])>.12)mz=g.axes[3]}
+if(g.hand==='right'&&g.axes.length>=4&&Math.abs(g.axes[2])>.12)ry=-g.axes[2]*2.5}
+else if(g.axes.length>=4){if(Math.abs(g.axes[2])>.15)mx+=g.axes[2];if(Math.abs(g.axes[3])>.15)mz+=g.axes[3]}
+if(g.axes&&g.axes.length>=2&&(!g.mapping||g.mapping==='')&&Math.abs(g.axes[0])>.15)ry-=g.axes[0]*2}
+if(!mx&&!mz&&!ry)return;
+if(ry){const r=this.el.getAttribute('rotation')||{x:0,y:0,z:0};this.el.setAttribute('rotation',{x:r.x,y:r.y+ry*d*60,z:r.z})}
+const cam=this.el.querySelector('[camera]');if(!cam)return;
+const wd=new THREE.Vector3();cam.object3D.getWorldDirection(wd);wd.y=0;wd.normalize();
+const rt=new THREE.Vector3();rt.crossVectors(wd,new THREE.Vector3(0,1,0)).normalize();
+const p=this.el.getAttribute('position');
+p.x+=(rt.x*mx+wd.x*(-mz))*s*d*60;p.z+=(rt.z*mx+wd.z*(-mz))*s*d*60;
+this.el.setAttribute('position',p)}});
+
+// ═══ SYSTEMS ═══
+const SYS={
+thermostat:{name:"Thermostat",states:["Room","Wall"],A:[[-0.10,0.10],[0.05,-0.08]],sc:8,colors:["#e8634f","#5ba4cf"],pts:[[1,.2],[-.5,1],[1,1],[-1,-.5],[.8,-.8]]},
+wedding:{name:"Wedding",states:["Dance","BAC","Noise"],A:[[-0.2,1.5,0.3],[0,-0.1,0],[0.6,0.8,-0.3]],sc:3,colors:["#e8634f","#f0b429","#5ba4cf"],pts:[[1,.3,.5],[.2,1,.1],[.5,.5,1],[-.5,.8,.3]]},
+swerve:{name:"Swerve",states:["Vx","Vy","Yaw"],A:[[-0.5,0,0.3],[0,-0.8,-2.0],[0,0.1,-0.4]],sc:3,colors:["#e8634f","#6bbf8a","#5ba4cf"],pts:[[1,.5,.2],[.3,1,-.3],[-.5,.5,1]]}};
+const DEF={thermostat:[[-0.10,0.10],[0.05,-0.08]],wedding:[[-0.2,1.5,0.3],[0,-0.1,0],[0.6,0.8,-0.3]],swerve:[[-0.5,0,0.3],[0,-0.8,-2.0],[0,0.1,-0.4]]};
+let cur='thermostat';
+
+// ═══ EIGEN MATH ═══
+function e2(A){const a=A[0][0],b=A[0][1],c=A[1][0],d=A[1][1],tr=a+d,det=a*d-b*c,disc=tr*tr-4*det;
+let vs;if(disc>=0)vs=[{r:(tr+Math.sqrt(disc))/2,i:0},{r:(tr-Math.sqrt(disc))/2,i:0}];
+else vs=[{r:tr/2,i:Math.sqrt(-disc)/2},{r:tr/2,i:-Math.sqrt(-disc)/2}];
+const vc=vs.map(ev=>{if(Math.abs(ev.i)>1e-10)return[1,0,0];const aa=A[0][0]-ev.r,bb=A[0][1];
+if(Math.abs(bb)>1e-10){const l=Math.sqrt(1+(aa/bb)**2);return[1/l,(-aa/bb)/l,0]}
+return Math.abs(aa)>1e-10?[0,1,0]:[1,0,0]});return{vs,vc}}
+
+function e3(A){const tr=A[0][0]+A[1][1]+A[2][2],
+p=A[0][0]*A[1][1]-A[0][1]*A[1][0]+A[0][0]*A[2][2]-A[0][2]*A[2][0]+A[1][1]*A[2][2]-A[1][2]*A[2][1],
+det=A[0][0]*(A[1][1]*A[2][2]-A[1][2]*A[2][1])-A[0][1]*(A[1][0]*A[2][2]-A[1][2]*A[2][0])+A[0][2]*(A[1][0]*A[2][1]-A[1][1]*A[2][0]),
+a2=-tr,a1=p,a0=-det,Q=(3*a1-a2*a2)/9,R=(9*a2*a1-27*a0-2*a2**3)/54,D=Q**3+R*R,vs=[];
+if(D<=0){const th=Math.acos(Math.max(-1,Math.min(1,R/Math.sqrt(-(Q**3))))),sq=2*Math.sqrt(-Q);
+vs.push({r:sq*Math.cos(th/3)-a2/3,i:0});vs.push({r:sq*Math.cos((th+2*Math.PI)/3)-a2/3,i:0});vs.push({r:sq*Math.cos((th+4*Math.PI)/3)-a2/3,i:0})}
+else{const sd=Math.sqrt(D),S=Math.cbrt(R+sd),T=Math.cbrt(R-sd);vs.push({r:S+T-a2/3,i:0});
+const rp=-(S+T)/2-a2/3,ip=Math.sqrt(3)/2*(S-T);vs.push({r:rp,i:ip});vs.push({r:rp,i:-ip})}
+const vc=vs.map(ev=>{if(Math.abs(ev.i)>1e-8)return[.577,.577,.577];const l=ev.r,
+M=[[A[0][0]-l,A[0][1],A[0][2]],[A[1][0],A[1][1]-l,A[1][2]],[A[2][0],A[2][1],A[2][2]-l]];
+let v=[M[0][1]*M[1][2]-M[0][2]*M[1][1],M[0][2]*M[1][0]-M[0][0]*M[1][2],M[0][0]*M[1][1]-M[0][1]*M[1][0]],
+ln=Math.sqrt(v[0]**2+v[1]**2+v[2]**2);
+if(ln<1e-10){v=[M[0][1]*M[2][2]-M[0][2]*M[2][1],M[0][2]*M[2][0]-M[0][0]*M[2][2],M[0][0]*M[2][1]-M[0][1]*M[2][0]];ln=Math.sqrt(v[0]**2+v[1]**2+v[2]**2)}
+return ln<1e-10?[1,0,0]:v.map(x=>x/ln)});return{vs,vc}}
+
+function sim(A,st,steps,dt,sc){const n=A.length;let s=[...st];const pts=[s.map(x=>x*sc)];
+for(let i=0;i<steps;i++){const ns=Array(n).fill(0);for(let r=0;r<n;r++)for(let c=0;c<n;c++)ns[r]+=A[r][c]*s[c];
+s=s.map((x,j)=>Math.max(-4,Math.min(4,x+ns[j]*dt)));pts.push(s.map(x=>x*sc))}return pts}
+
+// ═══ SCENE BUILDERS ═══
+function clr(id){const e=document.getElementById(id);while(e&&e.children.length)e.removeChild(e.children[0])}
+
+function buildAxes(sys){clr('axes-group');const g=document.getElementById('axes-group'),al=2.8;
+sys.states.forEach((nm,i)=>{const c=sys.colors[i],end=[0,0,0],en=[0,0,0];
+if(i===0){end[0]=al;en[0]=-al}else if(i===1){end[1]=al;en[1]=-al}else{end[2]=al;en[2]=-al}
+const l=document.createElement('a-entity');l.setAttribute('line',`start:0 0 0;end:${end.join(' ')};color:${c};opacity:0.7`);g.appendChild(l);
+const l2=document.createElement('a-entity');l2.setAttribute('line',`start:0 0 0;end:${en.join(' ')};color:${c};opacity:0.2`);g.appendChild(l2);
+const lb=document.createElement('a-text'),lp=[...end];lp[i]=al+.3;
+lb.setAttribute('value',`x${i+1}:${nm}`);lb.setAttribute('position',lp.join(' '));
+lb.setAttribute('color',c);lb.setAttribute('align','center');lb.setAttribute('width','3');
+lb.setAttribute('side','double');lb.setAttribute('look-at','[camera]');g.appendChild(lb)})}
+
+function buildEvec(sys){clr('evec-group');const g=document.getElementById('evec-group'),A=sys.A,n=A.length,
+ed=n===2?e2(A):e3(A),cols=['#f0b429','#6bbf8a','#e8634f'];
+ed.vs.forEach((ev,i)=>{if(Math.abs(ev.i)>.01)return;const v=ed.vc[i],al=2,c=cols[i%3],un=ev.r>.001,
+ep=[v[0]*al,v[1]*al,n===2?0:v[2]*al];
+const sh=document.createElement('a-entity');sh.setAttribute('line',`start:0 0 0;end:${ep.join(' ')};color:${c};opacity:0.9`);g.appendChild(sh);
+const tp=document.createElement('a-cone');tp.setAttribute('position',ep.join(' '));
+tp.setAttribute('radius-bottom','0.05');tp.setAttribute('radius-top','0');tp.setAttribute('height','0.12');tp.setAttribute('color',c);
+if(un)tp.setAttribute('animation','property:scale;to:1.5 1.5 1.5;dur:400;dir:alternate;loop:true');g.appendChild(tp);
+const lb=document.createElement('a-text');lb.setAttribute('position',`${ep[0]*1.15} ${ep[1]*1.15+.1} ${ep[2]*1.15}`);
+lb.setAttribute('value',`L${i+1}=${ev.r.toFixed(3)}\n${un?'UNSTABLE':'stable'}`);
+lb.setAttribute('color',un?'#e8634f':'#6bbf8a');lb.setAttribute('align','center');lb.setAttribute('width','2.5');
+lb.setAttribute('side','double');lb.setAttribute('look-at','[camera]');g.appendChild(lb)});return ed}
+
+function buildTraj(sys){clr('traj-group');const g=document.getElementById('traj-group'),n=sys.A.length,
+tc=['#5ba4cf','#e8634f','#6bbf8a','#f0b429','#a78bfa'];
+sys.pts.forEach((pt,pi)=>{const tr=sim(sys.A,pt,350,.05,sys.sc),c=tc[pi%5];
+const sm=document.createElement('a-sphere'),sp=tr[0];
+sm.setAttribute('position',n===2?`${sp[0]} ${sp[1]} 0`:`${sp[0]} ${sp[1]} ${sp[2]}`);
+sm.setAttribute('radius','0.035');sm.setAttribute('color',c);g.appendChild(sm);
+for(let i=4;i<tr.length;i+=4){const p=tr[i],pv=tr[i-4],op=Math.max(.08,.7-i/tr.length);
+const ps=n===2?`${p[0]} ${p[1]} 0`:`${p[0]} ${p[1]} ${p[2]}`;
+const pvs=n===2?`${pv[0]} ${pv[1]} 0`:`${pv[0]} ${pv[1]} ${pv[2]}`;
+const ln=document.createElement('a-entity');ln.setAttribute('line',`start:${pvs};end:${ps};color:${c};opacity:${op}`);g.appendChild(ln)}})}
+
+// ═══ VR UI BUILDERS ═══
+function buildSysButtons(){
+const g=document.getElementById('sys-buttons');g.innerHTML='';
+const names=['thermostat','wedding','swerve'];
+names.forEach((name,i)=>{
+const x=-0.45+i*0.45;
+const btn=document.createElement('a-entity');btn.setAttribute('position',`${x} 0 0`);btn.classList.add('clickable');
+const bg=document.createElement('a-plane');bg.setAttribute('width','0.4');bg.setAttribute('height','0.15');
+bg.setAttribute('color',name===cur?'#5ba4cf':'#1a2332');bg.setAttribute('opacity','0.9');bg.classList.add('clickable');
+btn.appendChild(bg);
+const tx=document.createElement('a-text');tx.setAttribute('value',SYS[name].name);
+tx.setAttribute('position','0 0 0.005');tx.setAttribute('color',name===cur?'#0a0a1a':'#5ba4cf');
+tx.setAttribute('align','center');tx.setAttribute('width','1.2');btn.appendChild(tx);
+btn.addEventListener('click',()=>{switchSystem(name)});
+g.appendChild(btn)})}
+
+function buildMatrixControls(){
+const g=document.getElementById('matrix-controls');g.innerHTML='';
+const sys=SYS[cur],n=sys.A.length;
+let yOff=0;
+for(let r=0;r<n;r++){for(let c=0;c<n;c++){
+const val=sys.A[r][c];const y=-yOff*0.22;
+// Label
+const lb=document.createElement('a-text');lb.setAttribute('value',`A(${r+1},${c+1})=${val.toFixed(2)}`);
+lb.setAttribute('position',`-0.15 ${y} 0`);lb.setAttribute('color',val>.01?'#e8634f':val<-.01?'#6bbf8a':'#8899aa');
+lb.setAttribute('align','center');lb.setAttribute('width','1.2');lb.setAttribute('id',`albl-${r}-${c}`);
+g.appendChild(lb);
+// Minus button
+const mb=document.createElement('a-entity');mb.setAttribute('position',`-0.6 ${y} 0`);mb.classList.add('clickable');
+const mbg=document.createElement('a-plane');mbg.setAttribute('width','0.15');mbg.setAttribute('height','0.15');
+mbg.setAttribute('color','#2a1a1a');mbg.setAttribute('opacity','0.9');mbg.classList.add('clickable');mb.appendChild(mbg);
+const mt=document.createElement('a-text');mt.setAttribute('value','-');mt.setAttribute('position','0 0 0.005');
+mt.setAttribute('color','#e8634f');mt.setAttribute('align','center');mt.setAttribute('width','1.5');mb.appendChild(mt);
+mb.addEventListener('click',()=>{sys.A[r][c]=Math.max(-3,sys.A[r][c]-0.1);updateAll()});
+g.appendChild(mb);
+// Plus button
+const pb=document.createElement('a-entity');pb.setAttribute('position',`0.3 ${y} 0`);pb.classList.add('clickable');
+const pbg=document.createElement('a-plane');pbg.setAttribute('width','0.15');pbg.setAttribute('height','0.15');
+pbg.setAttribute('color','#1a2a1a');pbg.setAttribute('opacity','0.9');pbg.classList.add('clickable');pb.appendChild(pbg);
+const pt=document.createElement('a-text');pt.setAttribute('value','+');pt.setAttribute('position','0 0 0.005');
+pt.setAttribute('color','#6bbf8a');pt.setAttribute('align','center');pt.setAttribute('width','1.5');pb.appendChild(pt);
+pb.addEventListener('click',()=>{sys.A[r][c]=Math.min(3,sys.A[r][c]+0.1);updateAll()});
+g.appendChild(pb);
+yOff++}}
+// Reset button
+const rb=document.createElement('a-entity');rb.setAttribute('position',`0 ${-yOff*0.22-0.15} 0`);rb.classList.add('clickable');
+const rbg=document.createElement('a-plane');rbg.setAttribute('width','0.6');rbg.setAttribute('height','0.15');
+rbg.setAttribute('color','#333');rbg.setAttribute('opacity','0.9');rbg.classList.add('clickable');rb.appendChild(rbg);
+const rt=document.createElement('a-text');rt.setAttribute('value','RESET');rt.setAttribute('position','0 0 0.005');
+rt.setAttribute('color','#f0b429');rt.setAttribute('align','center');rt.setAttribute('width','1.2');rb.appendChild(rt);
+rb.addEventListener('click',()=>{SYS[cur].A=DEF[cur].map(r=>[...r]);updateAll()});
+g.appendChild(rb)}
+
+function updateEigenPanel(ed){
+const g=document.getElementById('eigen-readout');g.innerHTML='';
+ed.vs.forEach((ev,i)=>{const st=ev.r<-.001;
+const s=Math.abs(ev.i)>.01?`${ev.r.toFixed(2)}+${ev.i.toFixed(2)}j`:ev.r.toFixed(3);
+const t=document.createElement('a-text');
+t.setAttribute('value',`L${i+1} = ${s}  ${st?'stable':'UNSTABLE'}`);
+t.setAttribute('position',`0 ${-i*0.2} 0`);t.setAttribute('color',st?'#6bbf8a':'#e8634f');
+t.setAttribute('align','center');t.setAttribute('width','1.5');g.appendChild(t)});
+const stab=document.getElementById('stab-text'),ok=ed.vs.every(v=>v.r<-.001);
+stab.setAttribute('value',ok?'SYSTEM STABLE':'SYSTEM UNSTABLE');
+stab.setAttribute('color',ok?'#6bbf8a':'#e8634f')}
+
+function updateMatrixLabels(){
+const sys=SYS[cur],n=sys.A.length;
+for(let r=0;r<n;r++)for(let c=0;c<n;c++){
+const lb=document.getElementById(`albl-${r}-${c}`);
+if(lb){const v=sys.A[r][c];lb.setAttribute('value',`A(${r+1},${c+1})=${v.toFixed(2)}`);
+lb.setAttribute('color',v>.01?'#e8634f':v<-.01?'#6bbf8a':'#8899aa')}}}
+
+function updateAll(){
+updateMatrixLabels();
+const sys=SYS[cur],ed=buildEvec(sys);buildTraj(sys);updateEigenPanel(ed)}
+
+function switchSystem(name){cur=name;const sys=SYS[name];
+document.getElementById('sys-label').setAttribute('value',sys.name);
+buildAxes(sys);buildSysButtons();buildMatrixControls();
+const ed=buildEvec(sys);buildTraj(sys);updateEigenPanel(ed)}
+
+// ═══ PRESET QUESTIONS ═══
+function buildPresets(){
+const g=document.getElementById('preset-btns');
+const presets=[
+{text:"Explain this",q:"Explain what I'm looking at in simple terms. What do the arrows and trails mean?"},
+{text:"Why unstable?",q:"Why is this system stable or unstable? Explain using the A matrix entries."},
+{text:"Eigenvectors?",q:"Explain what the eigenvectors mean physically for this system."}
+];
+presets.forEach((p,i)=>{
+const x=-0.5+i*0.55;
+const btn=document.createElement('a-entity');btn.setAttribute('position',`${x} 0 0`);btn.classList.add('clickable');
+const bg=document.createElement('a-plane');bg.setAttribute('width','0.48');bg.setAttribute('height','0.15');
+bg.setAttribute('color','#1a2332');bg.setAttribute('opacity','0.9');bg.classList.add('clickable');btn.appendChild(bg);
+const tx=document.createElement('a-text');tx.setAttribute('value',p.text);tx.setAttribute('position','0 0 0.005');
+tx.setAttribute('color','#028090');tx.setAttribute('align','center');tx.setAttribute('width','1.2');btn.appendChild(tx);
+btn.addEventListener('click',()=>askClaude(p.q));
+g.appendChild(btn)})}
+
+// ═══ VOICE INPUT ═══
+let recognition=null;
+function setupVoice(){
+if(!('webkitSpeechRecognition' in window)&&!('SpeechRecognition' in window))return;
+const SR=window.SpeechRecognition||window.webkitSpeechRecognition;
+recognition=new SR();recognition.continuous=false;recognition.interimResults=false;recognition.lang='en-US';
+recognition.onresult=e=>{const t=e.results[0][0].transcript;
+document.getElementById('chat-display').setAttribute('value','You: '+t);askClaude(t)};
+recognition.onerror=e=>{document.getElementById('chat-display').setAttribute('value','Voice error: '+e.error+'. Try a preset button.')};
+recognition.onend=()=>{const mic=document.querySelector('#mic-btn a-circle');if(mic)mic.setAttribute('color','#028090')}}
+
+document.querySelector('#mic-btn').addEventListener('click',()=>{
+if(!recognition){document.getElementById('chat-display').setAttribute('value','Voice not available.\nUse preset buttons below.');return}
+const mic=document.querySelector('#mic-btn a-circle');if(mic)mic.setAttribute('color','#e8634f');
+document.getElementById('chat-display').setAttribute('value','Listening...');
+recognition.start()});
+
+// ═══ CLAUDE CHAT ═══
+function getCtx(){const sys=SYS[cur],n=sys.A.length,ed=n===2?e2(sys.A):e3(sys.A);
+return`System:${sys.name}\nStates:${sys.states.join(',')}\nA:${JSON.stringify(sys.A)}\nEigenvalues:${ed.vs.map((v,i)=>'L'+(i+1)+'='+v.r.toFixed(3)).join(',')}\nStable:${ed.vs.every(v=>v.r<-.001)}`}
+
+async function askClaude(msg){
+const disp=document.getElementById('chat-display'),resp=document.getElementById('chat-response');
+disp.setAttribute('value','You: '+msg);resp.setAttribute('value','Thinking...');
+const url=localStorage.getItem('wu')||'';
+if(!url){resp.setAttribute('value','No Worker URL set.\nEnter it before going into VR.');return}
+try{const r=await fetch(url,{method:'POST',headers:{'Content-Type':'application/json'},
+body:JSON.stringify({message:msg,system_context:getCtx()})});
+const data=await r.json();
+if(data.content&&data.content[0]){
+let t=data.content[0].text;
+// Process scene commands
+const cm=t.match(/<scene_cmd>([\s\S]*?)<\/scene_cmd>/);
+if(cm){t=t.replace(/<scene_cmd>[\s\S]*?<\/scene_cmd>/g,'').trim();
+try{const cmd=JSON.parse(cm[1]);
+if(cmd.action==='update_A'&&cmd.A){SYS[cmd.system||cur].A=cmd.A;switchSystem(cur)}}catch(e){}}
+// Truncate for VR display
+if(t.length>400)t=t.substring(0,397)+'...';
+resp.setAttribute('value',t)}
+else resp.setAttribute('value','No response received.')}
+catch(e){resp.setAttribute('value','Error: '+e.message)}}
+
+// ═══ SETUP ═══
+function saveUrl(){localStorage.setItem('wu',document.getElementById('worker-url').value);
+document.getElementById('status').textContent='URL saved! Enter VR to begin.'}
+
+document.addEventListener('DOMContentLoaded',()=>{
+const saved=localStorage.getItem('wu');if(saved)document.getElementById('worker-url').value=saved;
+setupVoice();buildPresets();
+const scene=document.querySelector('a-scene');
+const init=()=>switchSystem('thermostat');
+if(scene.hasLoaded)init();else scene.addEventListener('loaded',init)});
+</script>
+</body>
+</html>
